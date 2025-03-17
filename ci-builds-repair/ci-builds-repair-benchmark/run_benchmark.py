@@ -1,6 +1,8 @@
 from benchmark import CIFixBenchmark
 from benhmark_functions import fix_apply_diff, fix_none
+import os
 
+os.environ["PYTHONUTF8"] = "1"
 # Name of the model used for the benchmark. It is used to track evaluation
 model_name = "diff"
 
@@ -14,12 +16,12 @@ CIBenchPython = CIFixBenchmark(model_name, config_path)
 fix_repo_function = fix_apply_diff
 
 # Run the benchmark
-# CIBenchPython.eval_dataset(fix_repo_function, num_dp=None, ids_list=None)
+CIBenchPython.eval_dataset(fix_repo_function, num_dp=None, ids_list=None)
 # You can run this method after evaluating dataset if some datapoints remained in waiting list.
-# CIBenchPython.get_results()
+CIBenchPython.get_results()
 
 # Download the dataset if you want to play with it
-test_dataset = CIBenchPython.get_dataset(force_download=True)
+# test_dataset = CIBenchPython.get_dataset(force_download=True)
 
 # You can load datased from the local folder with json files, passing the path to an argument dataset_folder
 # test_dataset = CIBenchPython.get_dataset(force_download=False, dataset_folder=dataset_folder)

@@ -13,12 +13,12 @@ def edit_workflow_push(workflow_file):
     """
 
     yaml = YAML()
-    with open(workflow_file, "r") as file:
+    with open(workflow_file, "r", encoding="utf-8") as file:
         yaml_data = yaml.load(file)
 
     yaml_data["on"] = "push"
 
-    with open(workflow_file, "w") as file:
+    with open(workflow_file, "w", encoding="utf-8") as file:
         yaml.dump(yaml_data, file)
 
 
@@ -67,16 +67,16 @@ def workflow_add_packages(workflow_file):
 
     ruamel.yaml.representer.RoundTripRepresenter.ignore_aliases = lambda x, y: True
     yaml = YAML()
-    with open(workflow_file, "r") as file:
+    with open(workflow_file, "r", encoding="utf-8") as file:
         yaml_data = yaml.load(file)
 
-    with open('packages_version_before_Jan24.txt', 'r') as f:
+    with open('packages_version_before_Jan24.txt', 'r', encoding="utf-8") as f:
         formatters = [line.strip() for line in f]
     command = '\n'.join([f'pip install {lib}' for lib in formatters])
     new_step = {"name": "install formatters", "run": command, "continue-on-error": True}
     add_step(yaml_data, new_step)
 
-    with open(workflow_file, "w") as file:
+    with open(workflow_file, "w", encoding="utf-8") as file:
         yaml.dump(yaml_data, file)
 
 
@@ -91,7 +91,7 @@ def copy_and_edit_workflow_file(datapoint, repo):
         if os.path.isfile(file_path):
             os.remove(file_path)
     workflow_file = os.path.join(workflow_dir, "workflow.yaml")
-    with open(workflow_file, "w") as f:
+    with open(workflow_file, "w", encoding="utf-8") as f:
         f.write(datapoint["workflow"])
     edit_workflow_push(workflow_file)
     # workflow_add_packages(workflow_file)
@@ -126,9 +126,8 @@ def push_repo(repo, credentials, benchmark_owner, user_branch_name):
         repo.delete_remote("origin")
     except:
         pass
-    origin_url = (
-        f"https://{username}:{token}@github.com/{benchmark_owner}/{repo.name}.git"
-    )
+    origin_url = f"https://{credentials['token']}@github.com/{benchmark_owner}/{repo.name}.git"
+
     origin = repo.create_remote("origin", url=origin_url)
     repo.git.push("--force", "--set-upstream", origin, repo.head.ref)
     # Tried this, but it did not work - returned an error
@@ -218,7 +217,7 @@ def get_run_data(repo_name, commit_sha, credentials, config):
         conclusion = "success"
     else:
         log_file_path = os.path.join(config.out_folder, "out_logs.txt")
-        with open(log_file_path, "a") as f:
+        with open(log_file_path, "a", encoding="utf-8") as f:
             f.write("--------------------DP BEGIN----------------------- \n")
             f.write(str(statuses) + "\n")
             f.write(str(conclusions) + "\n")
@@ -236,7 +235,7 @@ def fix_none(datapoint, repo_path, repo=None, out_folder=None):
 def fix_apply_diff(datapoint, repo_path, repo, out_folder):
     commit_sha = datapoint["sha_fail"][:7]
     diff_path = os.path.join(out_folder, f"{commit_sha}.diff")
-    with open(diff_path, "w") as f:
+    with open(diff_path, "w", encoding="utf-8") as f:
         f.write(datapoint["diff"])
     try:
         repo.git.apply(diff_path)
@@ -269,6 +268,7 @@ def process_datapoint(datapoint, fix_repo_function, config, credentials):
     fix_repo_function(datapoint, repo.working_dir, repo, config.out_folder)
     # Push the corrected repo
     commit_sha = push_repo(repo, credentials, config.benchmark_owner, user_branch_name)
+    print(f"Using GitHub Token: {credentials['token'][:4]}********")
     job_identificator = {
         "repo_name": repo.name,
         "commit": commit_sha,
