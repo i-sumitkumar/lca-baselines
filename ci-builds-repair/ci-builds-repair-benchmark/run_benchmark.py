@@ -14,9 +14,9 @@ CIBenchPython = CIFixBenchmark(model_name, config_path)
 fix_repo_function = fix_apply_diff
 
 # Run the benchmark
-# CIBenchPython.eval_dataset(fix_repo_function, num_dp=None, ids_list=None)
+CIBenchPython.eval_dataset(fix_repo_function, num_dp=None, ids_list=None)
 # You can run this method after evaluating dataset if some datapoints remained in waiting list.
-# CIBenchPython.get_results()
+CIBenchPython.get_results()
 
 # Download the dataset if you want to play with it
 test_dataset = CIBenchPython.get_dataset(force_download=True)

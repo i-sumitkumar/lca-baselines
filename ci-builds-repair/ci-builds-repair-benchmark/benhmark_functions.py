@@ -13,12 +13,12 @@ def edit_workflow_push(workflow_file):
     """
 
     yaml = YAML()
-    with open(workflow_file, "r") as file:
+    with open(workflow_file, "r", encoding="utf-8") as file:
         yaml_data = yaml.load(file)
 
     yaml_data["on"] = "push"
 
-    with open(workflow_file, "w") as file:
+    with open(workflow_file, "w", encoding="utf-8") as file:
         yaml.dump(yaml_data, file)
 
 
@@ -67,16 +67,16 @@ def workflow_add_packages(workflow_file):
 
     ruamel.yaml.representer.RoundTripRepresenter.ignore_aliases = lambda x, y: True
     yaml = YAML()
-    with open(workflow_file, "r") as file:
+    with open(workflow_file, "r", encoding="utf-8") as file:
         yaml_data = yaml.load(file)
 
-    with open('packages_version_before_Jan24.txt', 'r') as f:
+    with open('packages_version_before_Jan24.txt', 'r', encoding="utf-8") as f:
         formatters = [line.strip() for line in f]
     command = '\n'.join([f'pip install {lib}' for lib in formatters])
     new_step = {"name": "install formatters", "run": command, "continue-on-error": True}
     add_step(yaml_data, new_step)
 
-    with open(workflow_file, "w") as file:
+    with open(workflow_file, "w", encoding="utf-8") as file:
         yaml.dump(yaml_data, file)
 
 
@@ -91,7 +91,7 @@ def copy_and_edit_workflow_file(datapoint, repo):
         if os.path.isfile(file_path):
             os.remove(file_path)
     workflow_file = os.path.join(workflow_dir, "workflow.yaml")
-    with open(workflow_file, "w") as f:
+    with open(workflow_file, "w", encoding="utf-8") as f:
         f.write(datapoint["workflow"])
     edit_workflow_push(workflow_file)
     # workflow_add_packages(workflow_file)
@@ -146,47 +146,55 @@ def push_repo(repo, credentials, benchmark_owner, user_branch_name):
 
 
 def get_repo(datapoint, repos_folder, test_username, benchmark_owner, credentials):
-    """
-    clones repo and switches it to the required commit
-    creates branch with username
-    """
     id = datapoint["id"]
     username = credentials["username"]
     token = credentials["token"]
     model_name = credentials["model"]
     repo_name, repo_owner = datapoint["repo_name"], datapoint["repo_owner"]
-    # TODO add original branch name to new_branch_name?
     new_branch_name = f"{test_username}__{model_name}__id_{id}"
     commit_hash = datapoint["sha_fail"]
     repo_path = os.path.join(repos_folder, f"{repo_owner}__{repo_name}")
     repo_url = f"https://github.com/{benchmark_owner}/{repo_name}.git"
-    origin_url = (
-        f"https://{username}:{token}@github.com/{benchmark_owner}/{repo_name}.git"
-    )
+    origin_url = f"https://{username}:{token}@github.com/{benchmark_owner}/{repo_name}.git"
+
+    # Clone if necessary
     if (not os.path.exists(repo_path)) or (not os.listdir(repo_path)):
-        repo = git.Repo.clone_from(repo_url, repo_path, depth=1)  # branch=commit_hash
+        repo = git.Repo.clone_from(repo_url, repo_path)
     else:
         repo = git.Repo(repo_path)
+
     try:
         origin = repo.remote("origin")
-    except:
+    except Exception:
         origin = repo.create_remote("origin", url=origin_url)
+
+    # Fetch and reset to failing commit
     repo.git.fetch("origin", commit_hash)
     try:
         repo.git.reset("--hard", commit_hash)
-    except Exception as e:
-        print(e)
-        repo.git.checkout(commit_hash)
-    # remove excessive files
-    repo.git.clean("-fdx")
-    if not any((h for h in repo.heads if h.name == new_branch_name)):
-        # repo.delete_head("test_user", force=True)
-        repo.create_head(new_branch_name, force=True)
-    # TODO note that you should ban usage of the .git folder.
-    # You need flag "-B" to checkout to the current state. Otherwise, the old brach state would be used
-    repo.git.checkout("-B", new_branch_name)
-    repo.name, repo.owner = repo_name, repo_owner
+    except GitCommandError as e:
+        print(f" Skipping datapoint {id} - Git reset failed: {e}")
+        return None, None  # Returning None to indicate skipping
 
+    # Clean untracked files
+    repo.git.clean("-fdx")
+
+    # Verify current commit
+    current_commit = repo.head.commit.hexsha
+    if not current_commit.startswith(commit_hash):
+        print(f" Warning: Current commit {current_commit} does not match expected {commit_hash}")
+
+    # Create new branch if it doesn't exist
+    if not any(h.name == new_branch_name for h in repo.heads):
+        repo.create_head(new_branch_name, force=True)
+
+    try:
+        repo.git.checkout("-B", new_branch_name)
+    except GitCommandError as e:
+        print(f" Skipping datapoint {id} - Git checkout failed: {e}")
+        return None, None  # Returning None to indicate skipping
+
+    repo.name, repo.owner = repo_name, repo_owner
     return repo, new_branch_name
 
 
@@ -197,6 +205,7 @@ def get_run_data(repo_name, commit_sha, credentials, config):
     jobs_url = f"https://api.github.com/repos/{config.benchmark_owner}/{repo_name}/commits/{commit_sha}/check-runs"
     response = requests.get(jobs_url, headers=headers)
     data = response.json()
+    print(f"GitHub API Response: {data}")
     try:
         run_url = data["check_runs"][0]["html_url"]
         job_url = "/".join(run_url.split("/")[:-2])
@@ -218,7 +227,7 @@ def get_run_data(repo_name, commit_sha, credentials, config):
         conclusion = "success"
     else:
         log_file_path = os.path.join(config.out_folder, "out_logs.txt")
-        with open(log_file_path, "a") as f:
+        with open(log_file_path, "a", encoding="utf-8") as f:
             f.write("--------------------DP BEGIN----------------------- \n")
             f.write(str(statuses) + "\n")
             f.write(str(conclusions) + "\n")
@@ -236,39 +245,79 @@ def fix_none(datapoint, repo_path, repo=None, out_folder=None):
 def fix_apply_diff(datapoint, repo_path, repo, out_folder):
     commit_sha = datapoint["sha_fail"][:7]
     diff_path = os.path.join(out_folder, f"{commit_sha}.diff")
-    with open(diff_path, "w") as f:
+    with open(diff_path, "w",encoding="utf-8") as f:
         f.write(datapoint["diff"])
     try:
-        repo.git.apply(diff_path)
+        # Apply the diff while ignoring minor whitespace differences
+        repo.git.apply('--ignore-space-change', '--ignore-whitespace', diff_path)
     except GitCommandError as err:
         print(f"Sha = {datapoint['sha_fail']}")
         print(f"An error occurred while running the git command: {err}")
-    os.remove(diff_path)
+        # Optionally, log the diff file for further inspection.
+    finally:
+        if os.path.exists(diff_path):
+            os.remove(diff_path)
     return None
 
 
 def process_datapoint(datapoint, fix_repo_function, config, credentials):
     """
-    fix_repo_function - function that takes repo path and datapoint, repo object and out_folder.
-    it should edit the repo in the folder, nothing to return
+    fix_repo_function - function that takes repo path and datapoint, repo object, and out_folder.
+    It should edit the repo in the folder, nothing to return.
     credentials are passed in the following format:
     {'token': token, 'username': username}
     """
 
-    # TODO think, what to do if test_username (which converts to a branch) is already present
-    repo, user_branch_name = get_repo(
-        datapoint,
-        config.repos_folder,
-        config.test_username,
-        config.benchmark_owner,
-        credentials,
-    )
-    # Prepares workflow file Moves target workflow file to the .github/workflows
-    copy_and_edit_workflow_file(datapoint, repo)
-    # Fixing the repo. fix_repo_function is provided by user.
-    fix_repo_function(datapoint, repo.working_dir, repo, config.out_folder)
-    # Push the corrected repo
-    commit_sha = push_repo(repo, credentials, config.benchmark_owner, user_branch_name)
+    print("\n--------------------------------------")
+    print(f"Processing repository: {datapoint['repo_name']}")
+    print("--------------------------------------")
+
+    # Clone repo and create user-specific branch
+    try:
+        repo, user_branch_name = get_repo(
+            datapoint,
+            config.repos_folder,
+            config.test_username,
+            config.benchmark_owner,
+            credentials,
+        )
+
+        if repo is None:
+            print(f"Skipping datapoint {datapoint['id']} due to repository errors.")
+            return None
+
+    except Exception as e:
+        print(f"Error cloning repository {datapoint['repo_name']} for ID {datapoint['id']}: {e}")
+        return None  # Skip this datapoint
+
+    print(f"Created Branch: {user_branch_name}")
+    print(f"Working Directory: {repo.working_dir}")
+
+    try:
+        # Prepare workflow file - Moves target workflow file to .github/workflows
+        print("Copying and modifying workflow file...")
+        copy_and_edit_workflow_file(datapoint, repo)
+
+        # Apply Fix - fix_repo_function is provided by user
+        print(f"Applying Fix to {repo.name}...")
+        fix_repo_function(datapoint, repo.working_dir, repo, config.out_folder)
+
+        # Push the corrected repo
+        print(f"Pushing changes for {repo.name}...")
+        commit_sha = push_repo(repo, credentials, config.benchmark_owner, user_branch_name)
+
+        # Ensure commit_sha is valid before proceeding
+        if not commit_sha:
+            print(f"Skipping datapoint {datapoint['id']} due to push failure.")
+            return None
+
+        print(f"Fix successfully pushed. Commit SHA: {commit_sha}")
+
+    except Exception as e:
+        print(f"Error processing datapoint {datapoint['id']} ({datapoint['repo_name']}): {e}")
+        return None  # Skip this datapoint
+
+    # Generate job tracking info
     job_identificator = {
         "repo_name": repo.name,
         "commit": commit_sha,
@@ -278,8 +327,8 @@ def process_datapoint(datapoint, fix_repo_function, config, credentials):
         "difficulty": datapoint["difficulty"],
     }
 
+    print(f"Completed processing for {datapoint['repo_name']}.")
     return job_identificator
-
 
 def get_results(job_identificator, config, credentials):
     # We have to make some pause to get result or even url, unless it sees no runs

@@ -34,6 +34,8 @@ class CIFixBenchmark:
             "token": os.environ.get("TOKEN_GH"),
             "model": model_name,
         }
+        if not self.credentials["token"]:
+            raise ValueError("GitHub Token is missing! Check your environment variables.")
 
         os.makedirs(self.config.out_folder, exist_ok=True)
         os.makedirs(self.config.repos_folder, exist_ok=True)
@@ -78,75 +80,91 @@ class CIFixBenchmark:
         jobs_ids_file_path = os.path.join(
             self.config.out_folder, f"jobs_ids_{self.model_name}.jsonl"
         )
-        with open(jobs_ids_file_path, "w") as writer:
+        with open(jobs_ids_file_path, "w", encoding="utf-8") as writer:  # Added encoding="utf-8"
             for datapoint in tqdm(test_dataset):
                 job_identificator = process_datapoint(
                     datapoint, fix_repo_function, self.config, self.credentials
                 )
+                if not job_identificator:
+                    print(f"Error: process_datapoint failed for datapoint {datapoint['id']}")
                 self.jobs_ids.append(job_identificator)
-                json.dump(job_identificator, writer)
+                json.dump(job_identificator, writer, ensure_ascii=False)  # Added ensure_ascii=False
                 writer.write("\n")
         return self.jobs_ids
 
     def eval_jobs(self, jobs_ids=None, job_ids_file=None, result_filename=None):
         if result_filename is None:
             result_filename = f"jobs_results_{self.model_name}.jsonl"
-        # Maybe we need to make some pause
+
         jobs_results_file_path = os.path.join(self.config.out_folder, result_filename)
-        jobs_awaiting_file_path = os.path.join(
-            self.config.out_folder, f"jobs_awaiting_{self.model_name}.jsonl"
-        )
-        jobs_invalid_file_path = os.path.join(
-            self.config.out_folder, f"jobs_invalid_{self.model_name}.jsonl"
-        )
-        result_file = open(jobs_results_file_path, "w")
-        if job_ids_file is not None:
-            jobs_ids = read_jsonl(job_ids_file)
-        elif jobs_ids is None:
-            jobs_ids = self.jobs_ids
-        jobs_ids_await = jobs_ids
-        n_attempts = 0
-        jobs_results = []
-        jobs_ids_invalid = []
-        # TODO discuss number of attempts and waiting time
-        while len(jobs_ids_await) > 0 and n_attempts < 12:
-            jobs_ids_await_new = []
-            for job_id in jobs_ids_await:
-                job_url, conclusion = get_results(job_id, self.config, self.credentials)
-                if conclusion == "waiting":
-                    jobs_ids_await_new.append(job_id)
-                elif conclusion == "error":
-                    jobs_ids_invalid.append(job_id)
-                else:
-                    job_id["url"] = job_url
-                    job_id["conclusion"] = conclusion
-                    jobs_results.append(job_id)
-                    json.dump(job_id, result_file)
-                    result_file.write("\n")
+        jobs_awaiting_file_path = os.path.join(self.config.out_folder, f"jobs_awaiting_{self.model_name}.jsonl")
+        jobs_invalid_file_path = os.path.join(self.config.out_folder, f"jobs_invalid_{self.model_name}.jsonl")
 
-            jobs_ids_await = jobs_ids_await_new
-            if len(jobs_ids_await) != 0:
-                result_file.close()
-                save_jsonl(jobs_awaiting_file_path, jobs_ids_await)
-                save_jsonl(jobs_invalid_file_path, jobs_ids_invalid)
-                print(
-                    f"Waiting 360 s to next request of evaluation. {len(jobs_ids_await)} jobs in waiting list."
-                )
-                time.sleep(360)
-                result_file = open(jobs_results_file_path, "a")
+        with open(jobs_results_file_path, "w", encoding="utf-8") as result_file:
+            if job_ids_file is not None:
+                jobs_ids = read_jsonl(job_ids_file)
+            elif jobs_ids is None:
+                jobs_ids = self.jobs_ids
 
-            n_attempts += 1
+            jobs_ids_await = jobs_ids
+            n_attempts = 0
+            jobs_results = []
+            jobs_ids_invalid = []
 
-        result_file.close()
+            while len(jobs_ids_await) > 0 and n_attempts < 12:
+                jobs_ids_await_new = []
+                for job_id in jobs_ids_await:
+                    if job_id is None:  #  Skip invalid job IDs
+                        print("Skipping invalid job (NoneType).")
+                        continue
+
+                    job_url, conclusion = get_results(job_id, self.config, self.credentials)
+
+                    if job_url is None or conclusion is None:  #  Skip if no valid results
+                        print(f"Skipping job {job_id} due to missing results.")
+                        continue
+
+                    print(f"Job ID: {job_id}, URL: {job_url}, Conclusion: {conclusion}")
+
+                    if conclusion == "waiting":
+                        jobs_ids_await_new.append(job_id)
+                    elif conclusion == "error":
+                        jobs_ids_invalid.append(job_id)
+                    else:
+                        # Ensure job_id is a valid dictionary before modifying it
+                        if isinstance(job_id, dict):
+                            job_id["url"] = job_url
+                            job_id["conclusion"] = conclusion
+                            jobs_results.append(job_id)
+                            json.dump(job_id, result_file, ensure_ascii=False)
+                            result_file.write("\n")
+                        else:
+                            print(f"Skipping invalid job format: {job_id}")
+
+                jobs_ids_await = jobs_ids_await_new
+
+                if len(jobs_ids_await) != 0:
+                    result_file.close()
+                    save_jsonl(jobs_awaiting_file_path, jobs_ids_await)
+                    save_jsonl(jobs_invalid_file_path, jobs_ids_invalid)
+                    print(
+                        f"Waiting 360s before the next evaluation request. {len(jobs_ids_await)} jobs still in the queue.")
+                    time.sleep(360)
+                    result_file = open(jobs_results_file_path, "a", encoding="utf-8")
+
+                n_attempts += 1
+
+            result_file.close()
+
         print("Results received")
-        print(f"{len(jobs_results)} jobs in results.")
-        print(f"{len(jobs_ids_await)} jobs left in waiting list.")
+        print(f"{len(jobs_results)} jobs successfully completed.")
+        print(f"{len(jobs_ids_await)} jobs left in the waiting list.")
         print(f"{len(jobs_ids_invalid)} jobs are invalid.")
+
         self.jobs_results = jobs_results
         return jobs_results
 
     def get_results(self, job_ids_file=None, result_filename=None):
-
         if job_ids_file is None:
             job_ids_file = os.path.join(
                 self.config.out_folder, f"jobs_ids_{self.model_name}.jsonl"
@@ -161,10 +179,20 @@ class CIFixBenchmark:
     def analyze_results(self, jobs_results=None, jobs_results_file=None):
         if jobs_results_file is not None:
             jobs_results = read_jsonl(jobs_results_file)
+
         if jobs_results is None:
             jobs_results = self.jobs_ids
 
+        # ✅ Filter out None values before creating DataFrame
+        jobs_results = [job for job in jobs_results if job is not None]
+
+        # ✅ Ensure we don't process an empty DataFrame
+        if not jobs_results:
+            print("No valid results to analyze. Exiting.")
+            return
+
         results_df = pd.DataFrame(jobs_results)
+
         total_counts = results_df["conclusion"].value_counts()
         total_ratio = total_counts / len(results_df)
         difficulty_counts = (
@@ -213,11 +241,11 @@ class CIFixBenchmark:
         jobs_ids_file_path = os.path.join(
             self.config.out_folder, f"jobs_ids_{self.model_name}.jsonl"
         )
-        with open(jobs_ids_file_path, "w") as writer:
+        with open(jobs_ids_file_path, "w", encoding="utf-8") as writer:  # Added encoding="utf-8"
             job_identificator = process_datapoint(
                 datapoint, fix_repo_function, self.config, self.credentials
             )
-            json.dump(job_identificator, writer)
+            json.dump(job_identificator, writer, ensure_ascii=False)  # Added ensure_ascii=False
             writer.write("\n")
         return job_identificator
 
